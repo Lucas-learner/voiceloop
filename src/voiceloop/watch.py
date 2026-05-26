@@ -83,7 +83,8 @@ def process_new_recording(
     print(f"[Watch] Synced to: {dest_path}", file=sys.stderr)
 
     # 2. ASR (single file, append to day's transcript)
-    asr_result = run_asr_for_file(dest_path, engine=asr_engine)
+    day = recording_day(source_path)
+    asr_result = run_asr_for_file(dest_path, data_dir, day, engine=asr_engine)
     row_count = len(asr_result)
     print(f"[Watch] ASR: {row_count} rows transcribed", file=sys.stderr)
 

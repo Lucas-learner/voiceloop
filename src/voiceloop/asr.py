@@ -199,15 +199,11 @@ def run_mlx_asr_for_file(audio_path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def run_asr_for_file(audio_path: Path, engine: str = "mlx") -> list[dict[str, str]]:
+def run_asr_for_file(audio_path: Path, data_dir: Path, day: str, engine: str = "mlx") -> list[dict[str, str]]:
     """Transcribe a single file and return transcript rows.
 
     Also appends to the day's transcript CSV.
     """
-    from .sync import recording_day
-
-    day = recording_day(audio_path)
-    data_dir = audio_path.parent.parent  # data/YYYYMMDD/audio.m4a -> data/
     output = transcript_path(data_dir, day)
 
     if engine == "mock":
