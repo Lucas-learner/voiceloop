@@ -220,6 +220,27 @@ def run_asr_for_file(audio_path: Path, data_dir: Path, day: str, engine: str = "
     return rows
 
 
+def run_asr_for_file_to_dir(audio_path: Path, output_dir: Path, engine: str = "mlx") -> list[dict[str, str]]:
+    """Transcribe a single file and write transcript.csv into output_dir.
+
+    Each recording gets its own folder with consistent naming.
+    """
+    output = output_dir / "transcript.csv"
+
+    if engine == "mock":
+        rows = [{"speaker": "", "content": f"Mock transcript for {audio_path.name}."}]
+    elif engine == "api":
+        text = run_api_asr(audio_path)
+        rows = [{"speaker": "", "content": text}]
+    elif engine == "mlx":
+        rows = run_mlx_asr_for_file(audio_path)
+    else:
+        raise ValueError(f"unsupported ASR engine: {engine}")
+
+    write_transcript(rows, output)
+    return rows
+
+
 def run_asr(data_dir: Path, day: str, engine: str = "mock", mock_text: str | None = None) -> dict[str, object]:
     if engine == "mock":
         return run_mock_asr(data_dir, day, mock_text=mock_text)

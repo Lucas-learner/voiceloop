@@ -41,17 +41,27 @@ def week_range(week_str: str | None = None) -> tuple[date, date]:
 
 
 def collect_meeting_files(data_dir: Path, monday: date, sunday: date) -> list[Path]:
-    """Collect all meeting markdown files within the week range."""
+    """Collect all meeting markdown files within the week range.
+
+    New layout: each recording has its own folder named YYYYMMDD_主题/,
+    containing YYYYMMDD_主题.md (the meeting minutes).
+    """
     files: list[Path] = []
-    current = monday
-    while current <= sunday:
-        day_str = current.strftime("%Y%m%d")
-        meetings_dir = data_dir / day_str / "meetings"
-        if meetings_dir.exists():
-            for path in sorted(meetings_dir.glob("*.md")):
-                if path.is_file() and not path.name.startswith("no_meeting"):
+    for folder in data_dir.iterdir():
+        if not folder.is_dir() or folder.name.startswith("tmp_"):
+            continue
+        # Parse date prefix from folder name: YYYYMMDD_...
+        day_match = re.match(r"(\d{8})_", folder.name)
+        if not day_match:
+            continue
+        try:
+            folder_date = datetime.strptime(day_match.group(1), "%Y%m%d").date()
+        except ValueError:
+            continue
+        if monday <= folder_date <= sunday:
+            for path in sorted(folder.glob("*.md")):
+                if path.is_file():
                     files.append(path)
-        current += timedelta(days=1)
     return files
 
 

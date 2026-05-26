@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -11,7 +12,6 @@ def is_icloud_placeholder(path: Path) -> bool:
     """Check if file is an iCloud placeholder (ends with .icloud or has xattr com.apple.icloud.itemName)."""
     if path.suffix == ".icloud":
         return True
-    # Check for extended attribute (com.apple.icloud.itemName)
     import subprocess
     try:
         result = subprocess.run(
@@ -49,7 +49,7 @@ def wait_for_file_ready(path: Path, timeout: int = 120, check_interval: float = 
         current_size = path.stat().st_size
         if current_size == last_size and current_size > 0:
             stable_count += 1
-            if stable_count >= 3:  # File stable for 3 checks
+            if stable_count >= 3:
                 print(f"[Watch] File ready: {path.name} ({current_size} bytes)", file=sys.stderr)
                 return True
         else:
@@ -70,50 +70,75 @@ def process_new_recording(
     asr_engine: str = "mlx",
     minutes_engine: str = "kimi",
 ) -> dict[str, object]:
-    """Process a single new recording: sync -> ASR -> minutes -> rename."""
-    from .asr import run_asr_for_file
-    from .postprocess import run_minutes
-    from .rename import is_default_named, rename_with_topic
-    from .sync import recording_day, rename_synced_copy, sync_single_file
+    """Process a single new recording into its own folder: YYYYMMDD_主题/.
 
-    print(f"[Watch] Processing: {source_path.name}", file=sys.stderr)
+    Pipeline:
+      1. Copy audio to a temp folder under data/
+      2. ASR -> transcript.csv
+      3. AI minutes -> meeting.md + topic
+      4. Rename temp folder to YYYYMMDD_主题/
+      5. Rename files inside to match folder name
+    """
+    from .asr import run_asr_for_file_to_dir
+    from .postprocess import run_minutes_for_dir
+    from .rename import sanitize_topic
+    from .sync import recording_day, recording_timestamp
 
-    # 1. Sync
-    dest_path = sync_single_file(source_path, data_dir)
-    print(f"[Watch] Synced to: {dest_path}", file=sys.stderr)
-
-    # 2. ASR (single file, append to day's transcript)
+    # Build a temporary working directory
     day = recording_day(source_path)
-    asr_result = run_asr_for_file(dest_path, data_dir, day, engine=asr_engine)
-    row_count = len(asr_result)
-    print(f"[Watch] ASR: {row_count} rows transcribed", file=sys.stderr)
+    ts = recording_timestamp(source_path).strftime("%Y%m%d_%H%M%S")
+    temp_name = f"tmp_{ts}"
+    temp_dir = data_dir / temp_name
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
-    # 3. Generate meeting minutes
-    day = recording_day(source_path)
-    minutes_result = run_minutes(data_dir, day, engine=minutes_engine, audio_files=[dest_path])
-    print(f"[Watch] Minutes: {minutes_result.get('outputs', [])}", file=sys.stderr)
+    # Copy audio into temp dir
+    temp_audio = temp_dir / source_path.name
+    shutil.copy2(source_path, temp_audio)
+    print(f"[Watch] Copied to temp: {temp_audio}", file=sys.stderr)
 
-    # 4. Rename synced copy only (never rename original Voice Memos file
-    # to avoid iCloud sync conflicts — iOS display name is metadata, not filename)
+    # ASR
+    asr_rows = run_asr_for_file_to_dir(temp_audio, temp_dir, engine=asr_engine)
+    print(f"[Watch] ASR: {len(asr_rows)} rows", file=sys.stderr)
+
+    # Minutes -> get topic
+    minutes_result = run_minutes_for_dir(temp_dir, engine=minutes_engine)
     topic = minutes_result.get("topic")
-    renamed_dest = None
-    if topic and is_default_named(source_path):
-        try:
-            renamed_dest = rename_synced_copy(dest_path, topic)
-            print(f"[Watch] Renamed sync copy: {renamed_dest.name}", file=sys.stderr)
-        except Exception as exc:
-            print(f"[Watch] Rename failed: {exc}", file=sys.stderr)
+    print(f"[Watch] Minutes topic: {topic}", file=sys.stderr)
+
+    # Determine final folder name
+    if topic:
+        final_base = f"{day}_{sanitize_topic(topic)}"
+    else:
+        final_base = ts
+
+    final_dir = data_dir / final_base
+    counter = 1
+    original_base = final_base
+    while final_dir.exists():
+        final_base = f"{original_base}_{counter}"
+        final_dir = data_dir / final_base
+        counter += 1
+        if counter > 100:
+            raise RuntimeError(f"Too many folder collisions for {original_base}")
+
+    # Rename temp dir -> final dir
+    temp_dir.rename(final_dir)
+    print(f"[Watch] Final folder: {final_dir.name}", file=sys.stderr)
+
+    # Rename files inside to match folder name
+    for file in final_dir.iterdir():
+        if file.is_file() and file.suffix in (".m4a", ".csv", ".md"):
+            new_name = f"{final_base}{file.suffix}"
+            file.rename(final_dir / new_name)
 
     return {
         "command": "process-file",
         "source": str(source_path),
-        "destination": str(dest_path),
+        "final_dir": str(final_dir),
         "day": day,
-        "asr_rows": row_count,
+        "asr_rows": len(asr_rows),
         "minutes_engine": minutes_engine,
         "topic": topic,
-        "renamed_source": None,
-        "renamed_destination": str(renamed_dest) if renamed_dest else None,
     }
 
 
