@@ -1,0 +1,34 @@
+[project]
+name = "voiceloop"
+version = "0.1.0"
+description = "VoiceLoop - Automatic AI meeting minutes and weekly reports from Apple Voice Memos"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "watchdog>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+]
+qwen-asr = [
+    "mlx-qwen3-asr>=0.3.2",
+]
+kimi = [
+    "httpx>=0.27",
+]
+
+[project.scripts]
+voiceloop = "voiceloop.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
