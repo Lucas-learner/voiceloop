@@ -74,15 +74,20 @@ python -m voiceloop install-cron
 
 ## 生成的文件
 
+每个录音一个文件夹：
+
 ```
 data/
-  YYYYMMDD/
-    YYYYMMDD_HHMM_主题.m4a    # 同步并重命名后的音频
-    transcript_YYYYMMDD.csv    # 当天转录文本
-    meetings/
-      meeting_YYYYMMDD.md      # 会议纪要
+  20260522_币圈投资方式与个人调性思考/
+    20260522_币圈投资方式与个人调性思考.m4a   ← 同步副本
+    20260522_币圈投资方式与个人调性思考.csv   ← 转录文本
+    20260522_币圈投资方式与个人调性思考.md    ← 会议纪要
+  20260522_项目立项讨论/
+    20260522_项目立项讨论.m4a
+    20260522_项目立项讨论.csv
+    20260522_项目立项讨论.md
 weekly/
-  weekly_YYYYWww.md            # 周报
+  weekly_YYYYWww.md                            ← 周报
 ```
 
 ## 快捷别名
