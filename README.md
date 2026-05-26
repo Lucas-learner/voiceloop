@@ -115,3 +115,4 @@ alias vldoctor='cd "$VOICELOOP_ROOT" && source .venv/bin/activate && python -m v
 2. **重命名安全**：仅对 iOS 默认命名格式（`YYYYMMDD HHMMSS-UUID.m4a`）的文件重命名
 3. **监听模式**：`watch` 前台运行，按 Ctrl+C 停止；建议使用 `screen` 或 `tmux` 常驻
 4. **周报定时**：cron 每周日午夜执行，Mac 需保持开机
+test
