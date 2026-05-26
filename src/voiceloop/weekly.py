@@ -65,51 +65,6 @@ def collect_meeting_files(data_dir: Path, monday: date, sunday: date) -> list[Pa
     return files
 
 
-def _resolve_kimi_api_key() -> str:
-    credentials_path = Path.home() / ".kimi" / "credentials" / "kimi-code.json"
-    if credentials_path.exists():
-        try:
-            data = json.loads(credentials_path.read_text(encoding="utf-8"))
-            access_token = data.get("access_token")
-            if access_token:
-                return str(access_token)
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
-    api_key = os.environ.get("KIMI_API_KEY")
-    if api_key:
-        return api_key
-    raise RuntimeError(
-        "Kimi API key not found. Either set KIMI_API_KEY environment variable "
-        "or login with 'kimi login' to create ~/.kimi/credentials/kimi-code.json"
-    )
-
-
-def _call_kimi_api(prompt: str, api_key: str, timeout: int = 600) -> str:
-    import httpx
-
-    response = httpx.post(
-        "https://api.kimi.com/coding/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "KimiCLI/1.44.0",
-        },
-        json={
-            "model": "kimi-latest",
-            "messages": [
-                {"role": "system", "content": "你是一个工作助手，帮助整理会议纪要周报。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.3,
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    response_json = response.json()
-    message = response_json["choices"][0]["message"]
-    return message.get("content", "") or message.get("reasoning_content", "") or ""
-
-
 def build_kimi_weekly_prompt(data_dir: Path, week_str: str | None = None) -> str:
     monday, sunday = week_range(week_str)
     files = collect_meeting_files(data_dir, monday, sunday)
@@ -161,25 +116,16 @@ def run_kimi_weekly(data_dir: Path, week_str: str | None = None) -> dict[str, ob
     weekly_dir.mkdir(parents=True, exist_ok=True)
     output_path = weekly_dir / f"weekly_{week_label}.md"
 
-    api_key = _resolve_kimi_api_key()
-    prompt = build_kimi_weekly_prompt(data_dir, week_str)
+    from .kimi_client import call_kimi_api_with_retry, resolve_kimi_config
 
-    max_retries = 3
-    last_error = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"[Kimi Weekly] Generating report (attempt {attempt}/{max_retries})...")
-            response_text = _call_kimi_api(prompt, api_key, timeout=600)
-            break
-        except Exception as exc:
-            last_error = exc
-            print(f"[Kimi Weekly] Attempt {attempt} failed: {exc}")
-            if attempt < max_retries:
-                wait = 2 ** attempt
-                print(f"[Kimi Weekly] Retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                raise RuntimeError(f"Kimi weekly failed after {max_retries} attempts: {last_error}") from last_error
+    api_key, base_url = resolve_kimi_config()
+    prompt = build_kimi_weekly_prompt(data_dir, week_str)
+    print(f"[Kimi Weekly] Generating report (base_url: {base_url})...")
+    response_text = call_kimi_api_with_retry(
+        prompt, api_key, base_url=base_url,
+        system_message="你是一个工作助手，帮助整理会议纪要周报。",
+        timeout=600,
+    )
 
     output_path.write_text(response_text, encoding="utf-8")
 

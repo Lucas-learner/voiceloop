@@ -140,24 +140,11 @@ def run_kimi_minutes_for_dir(input_dir: Path) -> dict[str, object]:
         "- ALL output must be in Chinese (中文).",
     ])
 
-    api_key = _resolve_kimi_api_key()
+    from .kimi_client import call_kimi_api_with_retry, resolve_kimi_config
 
-    max_retries = 3
-    last_error = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"[Kimi Minutes] Generating minutes (attempt {attempt}/{max_retries})...")
-            response_text = _call_kimi_api(prompt, api_key, timeout=600)
-            break
-        except Exception as exc:
-            last_error = exc
-            print(f"[Kimi Minutes] Attempt {attempt} failed: {exc}")
-            if attempt < max_retries:
-                wait = 2 ** attempt
-                print(f"[Kimi Minutes] Retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                raise RuntimeError(f"Kimi minutes failed after {max_retries} attempts: {last_error}") from last_error
+    api_key, base_url = resolve_kimi_config()
+    print(f"[Kimi Minutes] Generating minutes (base_url: {base_url})...")
+    response_text = call_kimi_api_with_retry(prompt, api_key, base_url=base_url, timeout=600)
 
     files, topic = parse_kimi_response(response_text)
 
@@ -304,25 +291,12 @@ def run_kimi_minutes(data_dir: Path, day: str, audio_files: list[Path] | None = 
     directory = data_dir / day
     directory.mkdir(parents=True, exist_ok=True)
 
-    api_key = _resolve_kimi_api_key()
-    prompt = build_kimi_minutes_prompt(data_dir, day, audio_files)
+    from .kimi_client import call_kimi_api_with_retry, resolve_kimi_config
 
-    max_retries = 3
-    last_error = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"[Kimi Minutes] Generating minutes (attempt {attempt}/{max_retries})...")
-            response_text = _call_kimi_api(prompt, api_key, timeout=600)
-            break
-        except Exception as exc:
-            last_error = exc
-            print(f"[Kimi Minutes] Attempt {attempt} failed: {exc}")
-            if attempt < max_retries:
-                wait = 2 ** attempt
-                print(f"[Kimi Minutes] Retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                raise RuntimeError(f"Kimi minutes failed after {max_retries} attempts: {last_error}") from last_error
+    api_key, base_url = resolve_kimi_config()
+    prompt = build_kimi_minutes_prompt(data_dir, day, audio_files)
+    print(f"[Kimi Minutes] Generating minutes (base_url: {base_url})...")
+    response_text = call_kimi_api_with_retry(prompt, api_key, base_url=base_url, timeout=600)
 
     files, topic = parse_kimi_response(response_text)
 
