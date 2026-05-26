@@ -93,17 +93,14 @@ def process_new_recording(
     minutes_result = run_minutes(data_dir, day, engine=minutes_engine, audio_files=[dest_path])
     print(f"[Watch] Minutes: {minutes_result.get('outputs', [])}", file=sys.stderr)
 
-    # 4. Rename if default named
+    # 4. Rename synced copy only (never rename original Voice Memos file
+    # to avoid iCloud sync conflicts — iOS display name is metadata, not filename)
     topic = minutes_result.get("topic")
-    renamed_source = None
     renamed_dest = None
     if topic and is_default_named(source_path):
         try:
-            renamed_source = rename_with_topic(source_path, topic)
-            print(f"[Watch] Renamed source: {renamed_source.name}", file=sys.stderr)
-            # Also rename the synced copy
             renamed_dest = rename_synced_copy(dest_path, topic)
-            print(f"[Watch] Renamed sync: {renamed_dest.name}", file=sys.stderr)
+            print(f"[Watch] Renamed sync copy: {renamed_dest.name}", file=sys.stderr)
         except Exception as exc:
             print(f"[Watch] Rename failed: {exc}", file=sys.stderr)
 
@@ -115,7 +112,7 @@ def process_new_recording(
         "asr_rows": row_count,
         "minutes_engine": minutes_engine,
         "topic": topic,
-        "renamed_source": str(renamed_source) if renamed_source else None,
+        "renamed_source": None,
         "renamed_destination": str(renamed_dest) if renamed_dest else None,
     }
 
