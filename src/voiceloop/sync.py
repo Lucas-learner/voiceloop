@@ -165,5 +165,37 @@ def sync_voice_memos(source_dir: Path, data_dir: Path, dry_run: bool = False, da
     }
 
 
+def sync_file_to_cloud(source_file: Path, sync_dir: Path | None) -> Path | None:
+    """Copy a single file to the cloud sync directory.
+
+    Returns the destination path if synced, None if skipped.
+    """
+    if sync_dir is None or not source_file.exists():
+        return None
+    sync_dir.mkdir(parents=True, exist_ok=True)
+    dest = sync_dir / source_file.name
+    shutil.copy2(source_file, dest)
+    return dest
+
+
+def sync_minutes_to_cloud(final_dir: Path, sync_dir: Path | None) -> Path | None:
+    """Copy the meeting minutes markdown to the cloud sync directory.
+
+    Returns the destination path if synced, None if skipped.
+    """
+    if sync_dir is None:
+        return None
+
+    md_files = [f for f in final_dir.iterdir() if f.is_file() and f.suffix == ".md"]
+    if not md_files:
+        return None
+
+    md_file = md_files[0]
+    sync_dir.mkdir(parents=True, exist_ok=True)
+    dest = sync_dir / md_file.name
+    shutil.copy2(md_file, dest)
+    return dest
+
+
 def dumps_summary(summary: dict[str, object]) -> str:
     return json.dumps(summary, indent=2, sort_keys=True)

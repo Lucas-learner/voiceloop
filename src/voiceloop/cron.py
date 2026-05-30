@@ -12,11 +12,32 @@ LEGACY_CRON_MARKERS = ()
 CRON_PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
-def cron_line(repo_root: Path, hour: int = 0, minute: int = 0) -> str:
+_DAY_NAMES = {
+    "sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6,
+}
+
+
+def _resolve_day_of_week(day: str | int) -> int:
+    if isinstance(day, int):
+        if 0 <= day <= 6:
+            return day
+        raise ValueError("day_of_week must be 0-6 (0=Sunday)")
+    lowered = day.lower()
+    if lowered in _DAY_NAMES:
+        return _DAY_NAMES[lowered]
+    raise ValueError(f"day_of_week must be one of {list(_DAY_NAMES.keys())} or 0-6, got: {day}")
+
+
+def _day_label(day: int) -> str:
+    labels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    return labels[day]
+
+
+def cron_line(repo_root: Path, hour: int = 0, minute: int = 0, day_of_week: int = 0) -> str:
     python_path = repo_root / ".venv" / "bin" / "python"
     log_path = repo_root / "logs" / "voiceloop_cron.log"
     return (
-        f"{minute} {hour} * * 0 "
+        f"{minute} {hour} * * {day_of_week} "
         f"PATH={shlex.quote(CRON_PATH)}; "
         f"cd {shlex.quote(str(repo_root))} && "
         f"{shlex.quote(str(python_path))} -m voiceloop weekly "
@@ -63,9 +84,10 @@ def managed_cron_lines(current: str, repo_root: Path | None = None) -> list[str]
     return lines
 
 
-def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", dry_run: bool = False, current: str | None = None) -> dict[str, object]:
+def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", day_of_week: str | int = 0, dry_run: bool = False, current: str | None = None) -> dict[str, object]:
     hour, minute = _validate_schedule_time(schedule_time)
-    line = cron_line(repo_root, hour=hour, minute=minute)
+    dow = _resolve_day_of_week(day_of_week)
+    line = cron_line(repo_root, hour=hour, minute=minute, day_of_week=dow)
     existing = read_current_crontab() if current is None and not dry_run else (current or "")
     preserved = [existing_line for existing_line in existing.splitlines() if existing_line not in managed_cron_lines(existing, repo_root)]
     new_crontab = "\n".join([*preserved, line]).strip("\n") + "\n"
@@ -75,10 +97,11 @@ def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", dry_run:
         "dry_run": dry_run,
         "already_present": line in existing.splitlines(),
         "schedule_time": f"{hour:02d}:{minute:02d}",
+        "day_of_week": dow,
         "cron_line": line,
         "backup_path": str(path),
-        "schedule_label": "Every Sunday at midnight",
-        "user_note": "This sets up VoiceLoop to generate weekly reports each Sunday when the Mac is awake.",
+        "schedule_label": f"Every {_day_label(dow)} at {hour:02d}:{minute:02d}",
+        "user_note": f"This sets up VoiceLoop to generate weekly reports each {_day_label(dow)} when the Mac is awake.",
     }
     if dry_run:
         summary["new_crontab"] = new_crontab
@@ -89,8 +112,8 @@ def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", dry_run:
     return summary
 
 
-def append_cron(repo_root: Path, dry_run: bool = False, current: str | None = None) -> dict[str, object]:
-    return replace_managed_cron(repo_root, schedule_time="00:00", dry_run=dry_run, current=current)
+def append_cron(repo_root: Path, dry_run: bool = False, current: str | None = None, day_of_week: str | int = 0) -> dict[str, object]:
+    return replace_managed_cron(repo_root, schedule_time="00:00", day_of_week=day_of_week, dry_run=dry_run, current=current)
 
 
 def remove_managed_cron(repo_root: Path, dry_run: bool = False, current: str | None = None) -> dict[str, object]:

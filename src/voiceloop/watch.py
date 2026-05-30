@@ -2,10 +2,58 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+
+def compress_audio_if_needed(audio_path: Path, bitrate_threshold: int = 128000) -> Path:
+    """Compress audio to 64 kbps mono AAC if bitrate exceeds threshold.
+
+    Uses ffprobe to detect bitrate and ffmpeg to transcode.
+    Returns the path to the (possibly compressed) audio file.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        return audio_path
+
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(audio_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        info = json.loads(result.stdout)
+        bitrate = int(info.get("format", {}).get("bit_rate", 0))
+    except (json.JSONDecodeError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return audio_path
+
+    if bitrate <= bitrate_threshold:
+        return audio_path
+
+    # Compress to 64 kbps mono AAC
+    output = audio_path.with_suffix(".m4a")
+    try:
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(audio_path), "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-ar", "48000", str(output)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=180,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"[Watch] Audio compression failed: {exc}", file=sys.stderr)
+        return audio_path
+
+    # Remove original large file, keep compressed
+    if output != audio_path:
+        audio_path.unlink()
+        print(f"[Watch] Compressed audio: {bitrate // 1000} kbps → 64 kbps mono AAC ({output.name})", file=sys.stderr)
+    return output
 
 
 def is_icloud_placeholder(path: Path) -> bool:
@@ -69,6 +117,7 @@ def process_new_recording(
     data_dir: Path,
     asr_engine: str = "mlx",
     minutes_engine: str = "kimi",
+    sync_dir: Path | None = None,
 ) -> dict[str, object]:
     """Process a single new recording into its own folder: YYYYMMDD_主题/.
 
@@ -82,7 +131,7 @@ def process_new_recording(
     from .asr import run_asr_for_file_to_dir
     from .postprocess import run_minutes_for_dir
     from .rename import sanitize_topic
-    from .sync import recording_day, recording_timestamp
+    from .sync import recording_day, recording_timestamp, sync_minutes_to_cloud
 
     # Build a temporary working directory
     day = recording_day(source_path)
@@ -95,6 +144,9 @@ def process_new_recording(
     temp_audio = temp_dir / source_path.name
     shutil.copy2(source_path, temp_audio)
     print(f"[Watch] Copied to temp: {temp_audio}", file=sys.stderr)
+
+    # Compress if high bitrate (e.g., Voice Memos lossless recordings)
+    temp_audio = compress_audio_if_needed(temp_audio)
 
     # ASR
     asr_rows = run_asr_for_file_to_dir(temp_audio, temp_dir, engine=asr_engine)
@@ -131,6 +183,11 @@ def process_new_recording(
             new_name = f"{final_base}{file.suffix}"
             file.rename(final_dir / new_name)
 
+    # Sync meeting minutes to cloud directory
+    synced_path = sync_minutes_to_cloud(final_dir, sync_dir)
+    if synced_path:
+        print(f"[Watch] Synced minutes to: {synced_path}", file=sys.stderr)
+
     return {
         "command": "process-file",
         "source": str(source_path),
@@ -139,6 +196,7 @@ def process_new_recording(
         "asr_rows": len(asr_rows),
         "minutes_engine": minutes_engine,
         "topic": topic,
+        "synced_path": str(synced_path) if synced_path else None,
     }
 
 
@@ -147,6 +205,7 @@ def start_watch(
     data_dir: Path,
     asr_engine: str = "mlx",
     minutes_engine: str = "kimi",
+    sync_dir: Path | None = None,
 ) -> dict[str, object]:
     """Start watching the source directory for new voice memos.
 
@@ -192,6 +251,7 @@ def start_watch(
                     data_dir,
                     asr_engine=asr_engine,
                     minutes_engine=minutes_engine,
+                    sync_dir=sync_dir,
                 )
                 print(json.dumps(result, indent=2, sort_keys=True), file=sys.stderr)
             except Exception as exc:

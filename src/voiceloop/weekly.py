@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 
@@ -65,51 +65,6 @@ def collect_meeting_files(data_dir: Path, monday: date, sunday: date) -> list[Pa
     return files
 
 
-def _resolve_kimi_api_key() -> str:
-    credentials_path = Path.home() / ".kimi" / "credentials" / "kimi-code.json"
-    if credentials_path.exists():
-        try:
-            data = json.loads(credentials_path.read_text(encoding="utf-8"))
-            access_token = data.get("access_token")
-            if access_token:
-                return str(access_token)
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
-    api_key = os.environ.get("KIMI_API_KEY")
-    if api_key:
-        return api_key
-    raise RuntimeError(
-        "Kimi API key not found. Either set KIMI_API_KEY environment variable "
-        "or login with 'kimi login' to create ~/.kimi/credentials/kimi-code.json"
-    )
-
-
-def _call_kimi_api(prompt: str, api_key: str, timeout: int = 600) -> str:
-    import httpx
-
-    response = httpx.post(
-        "https://api.kimi.com/coding/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "KimiCLI/1.44.0",
-        },
-        json={
-            "model": "kimi-latest",
-            "messages": [
-                {"role": "system", "content": "你是一个工作助手，帮助整理会议纪要周报。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.3,
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    response_json = response.json()
-    message = response_json["choices"][0]["message"]
-    return message.get("content", "") or message.get("reasoning_content", "") or ""
-
-
 def build_kimi_weekly_prompt(data_dir: Path, week_str: str | None = None) -> str:
     monday, sunday = week_range(week_str)
     files = collect_meeting_files(data_dir, monday, sunday)
@@ -153,7 +108,7 @@ def build_kimi_weekly_prompt(data_dir: Path, week_str: str | None = None) -> str
     ])
 
 
-def run_kimi_weekly(data_dir: Path, week_str: str | None = None) -> dict[str, object]:
+def run_kimi_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path | None = None) -> dict[str, object]:
     monday, sunday = week_range(week_str)
     week_label = week_str or f"{monday.isocalendar()[0]}W{monday.isocalendar()[1]:02d}"
 
@@ -161,27 +116,21 @@ def run_kimi_weekly(data_dir: Path, week_str: str | None = None) -> dict[str, ob
     weekly_dir.mkdir(parents=True, exist_ok=True)
     output_path = weekly_dir / f"weekly_{week_label}.md"
 
-    api_key = _resolve_kimi_api_key()
-    prompt = build_kimi_weekly_prompt(data_dir, week_str)
+    from .kimi_client import call_kimi_api_with_retry, resolve_kimi_config
 
-    max_retries = 3
-    last_error = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"[Kimi Weekly] Generating report (attempt {attempt}/{max_retries})...")
-            response_text = _call_kimi_api(prompt, api_key, timeout=600)
-            break
-        except Exception as exc:
-            last_error = exc
-            print(f"[Kimi Weekly] Attempt {attempt} failed: {exc}")
-            if attempt < max_retries:
-                wait = 2 ** attempt
-                print(f"[Kimi Weekly] Retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                raise RuntimeError(f"Kimi weekly failed after {max_retries} attempts: {last_error}") from last_error
+    api_key, base_url = resolve_kimi_config()
+    prompt = build_kimi_weekly_prompt(data_dir, week_str)
+    print(f"[Kimi Weekly] Generating report (base_url: {base_url})...")
+    response_text = call_kimi_api_with_retry(
+        prompt, api_key, base_url=base_url,
+        system_message="你是一个工作助手，帮助整理会议纪要周报。",
+        timeout=600,
+    )
 
     output_path.write_text(response_text, encoding="utf-8")
+
+    from .sync import sync_file_to_cloud
+    synced_path = sync_file_to_cloud(output_path, sync_dir)
 
     files = collect_meeting_files(data_dir, monday, sunday)
     return {
@@ -191,10 +140,11 @@ def run_kimi_weekly(data_dir: Path, week_str: str | None = None) -> dict[str, ob
         "range": f"{monday.isoformat()} to {sunday.isoformat()}",
         "meeting_count": len(files),
         "output_path": str(output_path),
+        "synced_path": str(synced_path) if synced_path else None,
     }
 
 
-def run_mock_weekly(data_dir: Path, week_str: str | None = None) -> dict[str, object]:
+def run_mock_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path | None = None) -> dict[str, object]:
     monday, sunday = week_range(week_str)
     week_label = week_str or f"{monday.isocalendar()[0]}W{monday.isocalendar()[1]:02d}"
     weekly_dir = data_dir.parent / "weekly"
@@ -204,6 +154,9 @@ def run_mock_weekly(data_dir: Path, week_str: str | None = None) -> dict[str, ob
     content = f"# 周报 {week_label}\n\n这是 mock 生成的周报。\n\n## 本周概览\n\n暂无内容。\n"
     output_path.write_text(content, encoding="utf-8")
 
+    from .sync import sync_file_to_cloud
+    synced_path = sync_file_to_cloud(output_path, sync_dir)
+
     files = collect_meeting_files(data_dir, monday, sunday)
     return {
         "command": "weekly",
@@ -212,14 +165,15 @@ def run_mock_weekly(data_dir: Path, week_str: str | None = None) -> dict[str, ob
         "range": f"{monday.isoformat()} to {sunday.isoformat()}",
         "meeting_count": len(files),
         "output_path": str(output_path),
+        "synced_path": str(synced_path) if synced_path else None,
     }
 
 
-def run_weekly(data_dir: Path, week_str: str | None = None, engine: str = "mock") -> dict[str, object]:
+def run_weekly(data_dir: Path, week_str: str | None = None, engine: str = "mock", sync_dir: Path | None = None) -> dict[str, object]:
     if engine == "mock":
-        return run_mock_weekly(data_dir, week_str)
+        return run_mock_weekly(data_dir, week_str, sync_dir=sync_dir)
     if engine == "kimi":
-        return run_kimi_weekly(data_dir, week_str)
+        return run_kimi_weekly(data_dir, week_str, sync_dir=sync_dir)
     raise ValueError(f"unsupported weekly engine: {engine}")
 
 

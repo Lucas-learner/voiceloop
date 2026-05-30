@@ -30,6 +30,7 @@ def add_common_paths(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", default=None, help=f"Voice Memos source directory. Default: {DEFAULT_SOURCE_DIR}")
     parser.add_argument("--data-dir", default=None, help="Local data directory. Default: ./data")
     parser.add_argument("--repo-root", default=None, help="Repository root. Default: installed package repository root")
+    parser.add_argument("--sync-dir", default=None, help="Cloud sync directory for meeting minutes. Default: ~/Library/Mobile Documents/com~apple~CloudDocs/数据同步/voiceloop")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     cron = subparsers.add_parser("install-cron", help="Set up the optional weekly cron job")
     add_common_paths(cron)
     cron.add_argument("--dry-run", action="store_true")
+    cron.add_argument("--day", default="fri", help="Day of week to run weekly report. Default: fri. Options: sun, mon, tue, wed, thu, fri, sat or 0-6")
 
     # remove-cron - Remove cron
     rm_cron = subparsers.add_parser("remove-cron", help="Remove the weekly cron job")
@@ -128,7 +130,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         return doctor_payload(args.source, args.data_dir, args.repo_root)
 
     if args.command == "watch":
-        return start_watch(config.source_dir, config.data_dir, asr_engine=args.asr_engine, minutes_engine=args.minutes_engine)
+        return start_watch(config.source_dir, config.data_dir, asr_engine=args.asr_engine, minutes_engine=args.minutes_engine, sync_dir=config.sync_dir)
 
     if args.command == "process-file":
         source_path = Path(args.path).expanduser().resolve()
@@ -139,13 +141,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             config.data_dir,
             asr_engine=args.asr_engine,
             minutes_engine=args.minutes_engine,
+            sync_dir=config.sync_dir,
         )
 
     if args.command == "weekly":
-        return run_weekly(config.data_dir, week_str=args.date, engine=args.engine)
+        return run_weekly(config.data_dir, week_str=args.date, engine=args.engine, sync_dir=config.sync_dir)
 
     if args.command == "install-cron":
-        return append_cron(config.repo_root, dry_run=args.dry_run)
+        return append_cron(config.repo_root, dry_run=args.dry_run, day_of_week=args.day)
 
     if args.command == "remove-cron":
         return remove_managed_cron(config.repo_root, dry_run=args.dry_run)

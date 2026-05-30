@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import importlib
 import json
 import os
@@ -21,7 +20,7 @@ def day_dir(data_dir: Path, day: str) -> Path:
 
 
 def transcript_path(data_dir: Path, day: str) -> Path:
-    return day_dir(data_dir, day) / f"transcript_{day}.csv"
+    return day_dir(data_dir, day) / f"transcript_{day}.md"
 
 
 def audio_files_for_day(data_dir: Path, day: str) -> list[Path]:
@@ -33,24 +32,22 @@ def audio_files_for_day(data_dir: Path, day: str) -> list[Path]:
 
 def write_transcript(rows: list[dict[str, str]], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["speaker", "content"], extrasaction="ignore")
-        writer.writeheader()
+    with output.open("w", encoding="utf-8") as handle:
         for row in rows:
-            writer.writerow({"speaker": row.get("speaker", ""), "content": row.get("content", "")})
+            content = row.get("content", "").strip()
+            if content:
+                handle.write(content + "\n\n")
 
 
 def append_transcript(rows: list[dict[str, str]], output: Path) -> None:
-    """Thread-safe append to transcript CSV."""
+    """Thread-safe append to transcript markdown."""
     with _transcript_lock:
         output.parent.mkdir(parents=True, exist_ok=True)
-        file_exists = output.exists()
-        with output.open("a", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["speaker", "content"], extrasaction="ignore")
-            if not file_exists:
-                writer.writeheader()
+        with output.open("a", encoding="utf-8") as handle:
             for row in rows:
-                writer.writerow({"speaker": row.get("speaker", ""), "content": row.get("content", "")})
+                content = row.get("content", "").strip()
+                if content:
+                    handle.write(content + "\n\n")
 
 
 def run_mock_asr(data_dir: Path, day: str, mock_text: str | None = None) -> dict[str, object]:
@@ -221,11 +218,11 @@ def run_asr_for_file(audio_path: Path, data_dir: Path, day: str, engine: str = "
 
 
 def run_asr_for_file_to_dir(audio_path: Path, output_dir: Path, engine: str = "mlx") -> list[dict[str, str]]:
-    """Transcribe a single file and write transcript.csv into output_dir.
+    """Transcribe a single file and write transcript.md into output_dir.
 
     Each recording gets its own folder with consistent naming.
     """
-    output = output_dir / "transcript.csv"
+    output = output_dir / "transcript.md"
 
     if engine == "mock":
         rows = [{"speaker": "", "content": f"Mock transcript for {audio_path.name}."}]
