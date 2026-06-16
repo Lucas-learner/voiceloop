@@ -113,7 +113,7 @@ def call_kimi_api(
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.3,
+            "temperature": 1,
         },
         timeout=timeout,
     )

@@ -177,10 +177,20 @@ def process_new_recording(
     temp_dir.rename(final_dir)
     print(f"[Watch] Final folder: {final_dir.name}", file=sys.stderr)
 
-    # Rename files inside to match folder name
+    # Rename files inside to match folder name. Keep meeting.md and
+    # transcript.md distinct so the minutes file is not overwritten by the
+    # raw transcript.
     for file in final_dir.iterdir():
-        if file.is_file() and file.suffix in (".m4a", ".csv", ".md"):
+        if not file.is_file():
+            continue
+        if file.suffix in (".m4a", ".csv"):
             new_name = f"{final_base}{file.suffix}"
+            file.rename(final_dir / new_name)
+        elif file.name == "meeting.md":
+            new_name = f"{final_base}.md"
+            file.rename(final_dir / new_name)
+        elif file.name == "transcript.md":
+            new_name = f"{final_base}_transcript.md"
             file.rename(final_dir / new_name)
 
     # Sync meeting minutes to cloud directory

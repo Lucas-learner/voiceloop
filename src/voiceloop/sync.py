@@ -182,17 +182,32 @@ def sync_minutes_to_cloud(final_dir: Path, sync_dir: Path | None) -> Path | None
     """Copy the meeting minutes markdown to the cloud sync directory.
 
     Returns the destination path if synced, None if skipped.
+
+    Prefers the renamed minutes file (<folder_name>.md), then falls back to
+    meeting.md or any markdown file in the folder.
     """
     if sync_dir is None:
         return None
 
-    md_files = [f for f in final_dir.iterdir() if f.is_file() and f.suffix == ".md"]
-    if not md_files:
+    # Prefer the renamed minutes file, then meeting.md, then any markdown file.
+    md_file: Path | None = None
+    renamed_minutes = final_dir / f"{final_dir.name}.md"
+    meeting_file = final_dir / "meeting.md"
+    if renamed_minutes.exists():
+        md_file = renamed_minutes
+    elif meeting_file.exists():
+        md_file = meeting_file
+    else:
+        md_files = [f for f in final_dir.iterdir() if f.is_file() and f.suffix == ".md"]
+        if md_files:
+            md_file = md_files[0]
+
+    if md_file is None:
         return None
 
-    md_file = md_files[0]
     sync_dir.mkdir(parents=True, exist_ok=True)
-    dest = sync_dir / md_file.name
+    # Sync with the folder-base filename so the cloud copy is consistently named.
+    dest = sync_dir / f"{final_dir.name}.md"
     shutil.copy2(md_file, dest)
     return dest
 

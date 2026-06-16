@@ -80,7 +80,7 @@ def _call_kimi_api(prompt: str, api_key: str, timeout: int = 600) -> str:
                 {"role": "system", "content": "你是一个工作助手，帮助整理会议纪要。"},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.3,
+            "temperature": 1,
         },
         timeout=timeout,
     )
@@ -114,12 +114,21 @@ def run_kimi_minutes_for_dir(input_dir: Path) -> dict[str, object]:
 
     Reads transcript.md (or legacy transcript.csv) from input_dir, writes meeting.md to input_dir.
     """
-    transcript = input_dir / "transcript.md"
-    if not transcript.exists():
-        # Fallback to legacy CSV format
-        transcript = input_dir / "transcript.csv"
+    # Look for transcript in several possible names after folder renaming.
+    transcript_candidates = [
+        input_dir / "transcript.md",
+        input_dir / f"{input_dir.name}_transcript.md",
+        input_dir / f"{input_dir.name}.csv",
+        input_dir / "transcript.csv",
+    ]
+    transcript: Path | None = None
+    for candidate in transcript_candidates:
+        if candidate.exists():
+            transcript = candidate
+            break
+
     template = load_minutes_prompt_template()
-    transcript_text = transcript.read_text(encoding="utf-8") if transcript.exists() else "(暂无转录内容)"
+    transcript_text = transcript.read_text(encoding="utf-8") if transcript else "(暂无转录内容)"
     audio_files = sorted(input_dir.glob("*.m4a"))
 
     prompt = "\n".join([
@@ -188,10 +197,18 @@ def run_mock_minutes_for_dir(input_dir: Path) -> dict[str, object]:
 def run_codex_minutes_for_dir(input_dir: Path) -> dict[str, object]:
     prompt_path = input_dir / "codex_minutes_prompt.md"
     template = load_minutes_prompt_template()
-    transcript = input_dir / "transcript.md"
-    if not transcript.exists():
-        transcript = input_dir / "transcript.csv"
-    transcript_text = transcript.read_text(encoding="utf-8") if transcript.exists() else "(暂无转录内容)"
+    transcript_candidates = [
+        input_dir / "transcript.md",
+        input_dir / f"{input_dir.name}_transcript.md",
+        input_dir / f"{input_dir.name}.csv",
+        input_dir / "transcript.csv",
+    ]
+    transcript: Path | None = None
+    for candidate in transcript_candidates:
+        if candidate.exists():
+            transcript = candidate
+            break
+    transcript_text = transcript.read_text(encoding="utf-8") if transcript else "(暂无转录内容)"
 
     prompt = "\n".join([
         "你是一个专业的对话整理助手，擅长将录音转写整理为结构化的纪要。",
