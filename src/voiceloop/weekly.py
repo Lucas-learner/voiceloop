@@ -108,13 +108,22 @@ def build_kimi_weekly_prompt(data_dir: Path, week_str: str | None = None) -> str
     ])
 
 
+def weekly_filename(sunday: date, week_label: str) -> str:
+    """Weekly report filename prefixed with the week's Sunday date.
+
+    The date prefix makes weekly reports sort chronologically alongside
+    recording notes (YYYYMMDD_主题.md) in the cloud sync directory.
+    """
+    return f"{sunday.strftime('%Y%m%d')}_weekly_{week_label}.md"
+
+
 def run_kimi_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path | None = None) -> dict[str, object]:
     monday, sunday = week_range(week_str)
     week_label = week_str or f"{monday.isocalendar()[0]}W{monday.isocalendar()[1]:02d}"
 
     weekly_dir = data_dir.parent / "weekly"
     weekly_dir.mkdir(parents=True, exist_ok=True)
-    output_path = weekly_dir / f"weekly_{week_label}.md"
+    output_path = weekly_dir / weekly_filename(sunday, week_label)
 
     from .kimi_client import call_kimi_api_with_retry, resolve_kimi_config
 
@@ -149,7 +158,7 @@ def run_mock_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path 
     week_label = week_str or f"{monday.isocalendar()[0]}W{monday.isocalendar()[1]:02d}"
     weekly_dir = data_dir.parent / "weekly"
     weekly_dir.mkdir(parents=True, exist_ok=True)
-    output_path = weekly_dir / f"weekly_{week_label}.md"
+    output_path = weekly_dir / weekly_filename(sunday, week_label)
 
     content = f"# 周报 {week_label}\n\n这是 mock 生成的周报。\n\n## 本周概览\n\n暂无内容。\n"
     output_path.write_text(content, encoding="utf-8")
@@ -170,6 +179,21 @@ def run_mock_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path 
 
 
 def run_weekly(data_dir: Path, week_str: str | None = None, engine: str = "mock", sync_dir: Path | None = None) -> dict[str, object]:
+    monday, sunday = week_range(week_str)
+    week_label = week_str or f"{monday.isocalendar()[0]}W{monday.isocalendar()[1]:02d}"
+    files = collect_meeting_files(data_dir, monday, sunday)
+    if not files:
+        return {
+            "command": "weekly",
+            "engine": engine,
+            "status": "skipped",
+            "reason": "no recordings this week",
+            "week": week_label,
+            "range": f"{monday.isoformat()} to {sunday.isoformat()}",
+            "meeting_count": 0,
+            "output_path": None,
+            "synced_path": None,
+        }
     if engine == "mock":
         return run_mock_weekly(data_dir, week_str, sync_dir=sync_dir)
     if engine == "kimi":

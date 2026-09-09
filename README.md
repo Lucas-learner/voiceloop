@@ -29,6 +29,9 @@ python -m voiceloop doctor
 # 启动监听（前台运行）
 python -m voiceloop watch
 
+# 或将 watch 挂载为 launchd 服务（开机自启、自动重启）
+python -m voiceloop install-watch
+
 # 手动处理单个文件
 python -m voiceloop process-file ~/path/to/recording.m4a
 
@@ -53,6 +56,8 @@ python -m voiceloop install-cron --day fri
 | `install-cron` | 安装自动周报 cron |
 | `install-cron --day fri` | 指定星期五生成周报 |
 | `remove-cron` | 移除 cron |
+| `install-watch` | 将 watch 挂载为 launchd 服务（登录自启、退出自动重启），日志在 `logs/voiceloop_watch.log` |
+| `remove-watch` | 卸载 watch 服务 |
 | `doctor` | 环境检查 |
 
 ## 引擎配置
@@ -98,7 +103,7 @@ data/
     20260522_币圈投资方式与个人调性思考.md    ← 转录文本
     20260522_币圈投资方式与个人调性思考.md    ← 结构化纪要
 weekly/
-  weekly_YYYYWww.md                            ← 周报
+  YYYYMMDD_weekly_YYYYWww.md                     ← 周报（日期为当周周日，与录音纪要按时间排序）
 ```
 
 ## 快捷别名
@@ -125,5 +130,5 @@ alias vldoctor='cd "$VOICELOOP_ROOT" && source .venv/bin/activate && python -m v
 1. **iCloud 同步**：新录音可能先以占位符形式出现，工具会自动等待下载完成
 2. **音频压缩**：仅在码率 > 128 kbps 时触发压缩，已压缩文件不会重复处理
 3. **重命名安全**：仅对 iOS 默认命名格式（`YYYYMMDD HHMMSS-UUID.m4a`）的文件重命名
-4. **监听模式**：`watch` 前台运行，按 Ctrl+C 停止；建议使用 `screen` 或 `tmux` 常驻
-5. **周报定时**：cron 默认每周五午夜执行，Mac 需保持开机
+4. **监听模式**：`watch` 前台运行，按 Ctrl+C 停止；也可用 `install-watch` 挂载为 launchd 服务常驻（推荐）
+5. **周报定时**：cron 默认每周五午夜执行，Mac 需保持开机；若当周没有任何录音纪要，则自动跳过、不生成周报

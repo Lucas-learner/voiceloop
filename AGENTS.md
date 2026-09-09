@@ -29,8 +29,9 @@ Voice Memos Dir (watched)
 | `asr.py` | Speech-to-text: MLX local or API; outputs Markdown transcripts |
 | `postprocess.py` | Generate dialogue notes via AI; supports generic adaptive prompts |
 | `rename.py` | Detect default names, rename with topic |
-| `weekly.py` | Compile weekly reports from notes |
+| `weekly.py` | Compile weekly reports from notes; skips generation when the week has no recordings |
 | `cron.py` | Weekly cron job management with configurable day-of-week |
+| `service.py` | launchd agent for the watch service (install-watch / remove-watch) |
 | `config.py` | Configuration loading (paths, sync_dir, env vars) |
 | `cli.py` | Command-line interface |
 | `kimi_client.py` | Kimi API client with retry logic |

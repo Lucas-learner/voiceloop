@@ -12,6 +12,7 @@ from .config import DEFAULT_SOURCE_DIR, load_config
 from .cron import append_cron, remove_managed_cron
 from .postprocess import run_minutes
 from .rename import is_default_named, rename_with_topic
+from .service import install_watch_agent, remove_watch_agent
 from .sync import recording_day, rename_synced_copy, sync_single_file, sync_voice_memos
 from .watch import process_new_recording, start_watch
 from .weekly import run_weekly
@@ -71,6 +72,16 @@ def build_parser() -> argparse.ArgumentParser:
     rm_cron = subparsers.add_parser("remove-cron", help="Remove the weekly cron job")
     add_common_paths(rm_cron)
     rm_cron.add_argument("--dry-run", action="store_true")
+
+    # install-watch - Mount watch as a launchd agent (auto-start at login)
+    install_watch = subparsers.add_parser("install-watch", help="Mount the watch service as a launchd agent")
+    add_common_paths(install_watch)
+    install_watch.add_argument("--dry-run", action="store_true")
+
+    # remove-watch - Unmount the watch service
+    remove_watch = subparsers.add_parser("remove-watch", help="Unmount the watch launchd agent")
+    add_common_paths(remove_watch)
+    remove_watch.add_argument("--dry-run", action="store_true")
 
     # Legacy batch commands (for manual use)
     sync_cmd = subparsers.add_parser("sync", help="Copy voice memos into dated folders")
@@ -152,6 +163,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 
     if args.command == "remove-cron":
         return remove_managed_cron(config.repo_root, dry_run=args.dry_run)
+
+    if args.command == "install-watch":
+        return install_watch_agent(config.repo_root, dry_run=args.dry_run)
+
+    if args.command == "remove-watch":
+        return remove_watch_agent(dry_run=args.dry_run)
 
     if args.command == "sync":
         return sync_voice_memos(config.source_dir, config.data_dir, dry_run=args.dry_run, day=args.date)
