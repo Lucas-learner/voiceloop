@@ -1,22 +1,75 @@
 # VoiceLoop - 语音备忘录纪要工具
 
-VoiceLoop 监听 Apple 语音备忘录目录，自动将新录音转录为文字、生成结构化纪要，并智能重命名为 `YYYYMMDD_主题.m4a`。支持投资尽调访谈、企业会议等多种对话场景，每周自动生成周报。
+VoiceLoop 监听 Apple 语音备忘录目录，自动将新录音转录为文字、生成结构化纪要（投资尽调、企业会议、融资路演等场景自适应），压缩大码率音频，智能重命名为 `YYYYMMDD_主题`，同步纪要到 iCloud，并每周自动生成周报。
 
-## 功能
+## 用 AI 代理安装（推荐）
 
-1. **自动监听**：后台监控语音备忘录目录，新录音自动处理
-2. **ASR 转录**：默认本地 MLX Qwen3-ASR，可选 API 模式，输出 Markdown 格式转录文本
-3. **AI 纪要生成**：通用自适应 prompt，支持投资尽调、企业会议、融资路演等场景，自动识别对话类型并选取相关板块
-4. **智能重命名**：提取主题后重命名为 `YYYYMMDD_主题`
-5. **音频压缩**：自动将大码率（无损）录音压缩为 64kbps 单声道 AAC，节省存储空间
-6. **iCloud 同步**：纪要和周报自动同步到指定 iCloud 文件夹
-7. **周报汇总**：支持自定义星期自动生成周报，支持手动触发
+本工具适合交给 AI 代理（Kimi Code、Claude Code、Codex 等）完成安装和验证。在你的工作目录中向代理提供仓库 URL：
 
-## 快速开始
+```
+https://github.com/Lucas-learner/voiceloop
+```
+
+然后告诉代理："帮我安装这个仓库"。代理会克隆仓库、创建虚拟环境、安装依赖、运行 `doctor` 检查环境，并用 mock 引擎验证端到端流程。
+
+安装、验证、操作、调试的完整代理操作手册见 [AGENTS.md](AGENTS.md)。普通用户通常不需要直接运行 README 中的命令。
+
+## 功能说明
+
+VoiceLoop 专注一件事：把语音备忘录里的新录音，自动变成归档好的「音频 + 转录 + 结构化纪要」，并按周汇总。
+
+它**不**录制麦克风音频，**不**处理非语音备忘录来源，**不**进行说话人识别或声纹分离。
+
+运行流程：
+
+```
+Apple 语音备忘录同步到 Mac
+  -> watchdog 检测到新 .m4a/.qta
+  -> 等待 iCloud 下载完成，复制到 data/临时目录
+  -> 大码率音频压缩为 64kbps 单声道 AAC（ffmpeg）
+  -> ASR 转录（本地 MLX Qwen3-ASR / 外部 API）
+  -> AI 生成结构化纪要并提取主题（Kimi / Codex）
+  -> 重命名归档为 data/YYYYMMDD_主题/
+  -> 纪要同步到 iCloud
+  -> 每周定时生成周报（cron，默认周五）
+```
+
+## 主要命令
 
 ```bash
-# 进入项目目录
-cd /Users/apple/projects/tools/voiceloop
+# 检查环境
+python -m voiceloop doctor
+
+# 启动监听（前台运行，Ctrl+C 停止）
+python -m voiceloop watch
+
+# 或将 watch 挂载为 launchd 服务（登录自启、自动重启，推荐常驻）
+python -m voiceloop install-watch
+
+# 手动处理单个文件
+python -m voiceloop process-file ~/path/to/recording.m4a
+
+# 用 mock 引擎验证端到端流程（无需真实模型/密钥）
+python -m voiceloop process-file examples/sample_audio/sample.m4a --asr-engine mock --minutes-engine mock
+
+# 手动生成本周周报
+python -m voiceloop weekly
+
+# 安装自动周报 cron（默认每周五）
+python -m voiceloop install-cron --day fri
+```
+
+## 使用模式
+
+- **常驻模式（推荐）**：`install-watch` 将监听挂载为 launchd 服务，新录音随到随处理，日志在 `logs/voiceloop_watch.log`
+- **手动模式**：需要时用 `process-file` 处理单个录音，或用 `asr` / `minutes` / `sync` 按日期批量补跑
+- **定时周报**：`install-cron` 安装 cron 后每周自动生成周报；若当周没有任何录音纪要则自动跳过
+
+## 手动安装
+
+```bash
+git clone https://github.com/Lucas-learner/voiceloop.git
+cd voiceloop
 
 # 创建虚拟环境并安装
 uv venv
@@ -25,21 +78,6 @@ uv pip install -e ".[qwen-asr,kimi]"
 
 # 检查环境
 python -m voiceloop doctor
-
-# 启动监听（前台运行）
-python -m voiceloop watch
-
-# 或将 watch 挂载为 launchd 服务（开机自启、自动重启）
-python -m voiceloop install-watch
-
-# 手动处理单个文件
-python -m voiceloop process-file ~/path/to/recording.m4a
-
-# 手动生成本周周报
-python -m voiceloop weekly
-
-# 安装自动周报 cron（默认每周五）
-python -m voiceloop install-cron --day fri
 ```
 
 ## CLI 命令
@@ -64,7 +102,7 @@ python -m voiceloop install-cron --day fri
 
 ### ASR 引擎
 
-- `mlx`（默认）：本地 MLX Qwen3-ASR，需安装 `mlx-qwen3-asr`
+- `mlx`（默认）：本地 MLX Qwen3-ASR，需安装 `mlx-qwen3-asr`，首次运行需下载模型
 - `api`：调用外部 API（如 Whisper），需配置环境变量：
   ```bash
   export VOICELOOP_ASR_API_URL="https://api.openai.com/v1/audio/transcriptions"
@@ -98,20 +136,20 @@ python -m voiceloop install-cron --day fri
 
 ```
 data/
-  20260522_币圈投资方式与个人调性思考/
-    20260522_币圈投资方式与个人调性思考.m4a   ← 音频（自动压缩后）
-    20260522_币圈投资方式与个人调性思考.md    ← 转录文本
-    20260522_币圈投资方式与个人调性思考.md    ← 结构化纪要
+  20260616_国产算力性能优化技术融资路演/
+    20260616_国产算力性能优化技术融资路演.m4a              ← 音频（自动压缩后）
+    20260616_国产算力性能优化技术融资路演_transcript.md    ← 转录文本
+    20260616_国产算力性能优化技术融资路演.md               ← 结构化纪要
 weekly/
-  YYYYMMDD_weekly_YYYYWww.md                     ← 周报（日期为当周周日，与录音纪要按时间排序）
+  YYYYMMDD_weekly_YYYYWww.md                               ← 周报（日期为当周周日）
 ```
 
-## 快捷别名
+## 快捷别名（可选）
 
-在 `~/.zshrc` 中添加：
+在 `~/.zshrc` 中添加（路径改为你的实际克隆位置）：
 
 ```bash
-export VOICELOOP_ROOT="/Users/apple/projects/tools/voiceloop"
+export VOICELOOP_ROOT="$HOME/projects/tools/voiceloop"
 alias vl='cd "$VOICELOOP_ROOT" && source .venv/bin/activate && python -m voiceloop'
 alias vlwatch='cd "$VOICELOOP_ROOT" && source .venv/bin/activate && python -m voiceloop watch'
 alias vlweekly='cd "$VOICELOOP_ROOT" && source .venv/bin/activate && python -m voiceloop weekly'
@@ -125,10 +163,24 @@ alias vldoctor='cd "$VOICELOOP_ROOT" && source .venv/bin/activate && python -m v
 - `uv` 包管理器
 - `ffmpeg` + `ffprobe`（用于音频压缩和 .qta 转换）
 
-## 注意事项
+## 运行边界
 
 1. **iCloud 同步**：新录音可能先以占位符形式出现，工具会自动等待下载完成
 2. **音频压缩**：仅在码率 > 128 kbps 时触发压缩，已压缩文件不会重复处理
 3. **重命名安全**：仅对 iOS 默认命名格式（`YYYYMMDD HHMMSS-UUID.m4a`）的文件重命名
-4. **监听模式**：`watch` 前台运行，按 Ctrl+C 停止；也可用 `install-watch` 挂载为 launchd 服务常驻（推荐）
-5. **周报定时**：cron 默认每周五午夜执行，Mac 需保持开机；若当周没有任何录音纪要，则自动跳过、不生成周报
+4. **周报定时**：cron 默认每周五午夜执行，Mac 需保持开机；若当周没有任何录音纪要，则自动跳过、不生成周报
+5. **中文输出**：转录与纪要默认面向中文场景
+
+## 测试
+
+```bash
+# 运行全部测试
+pytest
+
+# mock 引擎端到端验证
+python -m voiceloop process-file examples/sample_audio/sample.m4a --asr-engine mock --minutes-engine mock
+```
+
+## 给 AI 代理的说明
+
+本仓库内置 [AGENTS.md](AGENTS.md)，包含架构说明、关键模块、扩展方式（新增 ASR / 纪要引擎）、prompt 模板位置与调试要点。代理在安装、排障或修改本工具时应优先阅读该文件。
