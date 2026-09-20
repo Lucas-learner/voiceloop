@@ -17,7 +17,8 @@ Voice Memos Dir (watched)
   -> rename temp folder → data/YYYYMMDD_主题/
   -> rename files inside to match folder name
   -> sync meeting.md to iCloud
-  -> weekly cron (configurable day, default Friday)
+  -> iMessage notify (if VOICELOOP_NOTIFY_TO set, via shared macos-notify channel)
+  -> weekly cron (configurable day, default Monday 00:00, summarizing the week that just ended via --last-week)
 ```
 
 ## Key Files
@@ -35,6 +36,7 @@ Voice Memos Dir (watched)
 | `config.py` | Configuration loading (paths, sync_dir, env vars) |
 | `cli.py` | Command-line interface |
 | `kimi_client.py` | Kimi API client with retry logic |
+| `notify.py` | iMessage notification on new minutes, via shared `~/projects/tools/macos-notify/` channel; best-effort, never breaks the pipeline |
 
 ## Environment Variables
 
@@ -48,6 +50,8 @@ Voice Memos Dir (watched)
 | `VOICELOOP_ASR_API_KEY` | External ASR API key | — |
 | `VOICELOOP_ASR_API_MODEL` | External ASR model name | — |
 | `KIMI_API_KEY` | Fallback Kimi API key | — |
+| `VOICELOOP_NOTIFY_TO` | iMessage recipient for new-minutes notification (phone or email); empty = no notify | — |
+| `VOICELOOP_NOTIFY_SCRIPT` | Shared notify channel script path | `~/projects/tools/macos-notify/send-imessage.sh` |
 
 ## Prompt Templates
 

@@ -127,6 +127,7 @@ def process_new_recording(
       3. AI minutes -> meeting.md + topic
       4. Rename temp folder to YYYYMMDD_主题/
       5. Rename files inside to match folder name
+      6. Sync minutes to iCloud, then iMessage notify (if configured)
     """
     from .asr import run_asr_for_file_to_dir
     from .postprocess import run_minutes_for_dir
@@ -197,6 +198,11 @@ def process_new_recording(
     synced_path = sync_minutes_to_cloud(final_dir, sync_dir)
     if synced_path:
         print(f"[Watch] Synced minutes to: {synced_path}", file=sys.stderr)
+
+    # Notify via shared iMessage channel (best-effort, never raises)
+    from .notify import notify_minutes_ready
+
+    notify_minutes_ready(topic=topic, folder_name=final_dir.name)
 
     return {
         "command": "process-file",
