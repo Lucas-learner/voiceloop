@@ -1,12 +1,59 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+PROCESSED_LEDGER_NAME = ".processed_recordings"
+WATCH_LOCK_NAME = ".voiceloop_watch.lock"
+
+
+def load_processed_sources(data_dir: Path) -> set[str]:
+    """Load the set of source file names already processed (persistent dedup ledger)."""
+    ledger = data_dir / PROCESSED_LEDGER_NAME
+    if not ledger.exists():
+        return set()
+    return {
+        line.strip()
+        for line in ledger.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
+def mark_processed_source(data_dir: Path, source_name: str) -> None:
+    """Append a source file name to the processed ledger."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    ledger = data_dir / PROCESSED_LEDGER_NAME
+    with ledger.open("a", encoding="utf-8") as f:
+        f.write(source_name + "\n")
+
+
+def acquire_watch_lock(data_dir: Path) -> Any:
+    """Acquire an exclusive non-blocking lock so only one watch instance runs.
+
+    Returns the open lock-file handle (must be kept alive for the lock to hold).
+    Raises RuntimeError if another instance already holds the lock.
+    """
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = data_dir / WATCH_LOCK_NAME
+    fh = lock_path.open("w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        raise RuntimeError(
+            "Another voiceloop watch instance is already running "
+            f"(lock: {lock_path}). Stop it before starting a new one."
+        )
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
 
 
 def compress_audio_if_needed(audio_path: Path, bitrate_threshold: int = 128000) -> Path:
@@ -119,27 +166,56 @@ def process_new_recording(
     minutes_engine: str = "kimi",
     sync_dir: Path | None = None,
 ) -> dict[str, object]:
+    from .sessions import existing_recording, pipeline_lock, source_id, sync_session, window_minutes
+
+    window_minutes()  # Validate configuration before running ASR or publishing files.
+    with pipeline_lock(data_dir):
+        recording_id = source_id(source_path)
+        existing = existing_recording(data_dir, recording_id)
+        if existing:
+            # Retry a previous cloud-sync failure without rerunning ASR/minutes.
+            synced = sync_session(data_dir, Path(existing["final_dir"]), sync_dir)
+            existing["synced_path"] = str(synced) if synced else None
+            return existing
+        return _process_new_recording(source_path, data_dir, asr_engine, minutes_engine, sync_dir, recording_id)
+
+
+def _process_new_recording(
+    source_path: Path,
+    data_dir: Path,
+    asr_engine: str,
+    minutes_engine: str,
+    sync_dir: Path | None,
+    recording_id: str,
+) -> dict[str, object]:
     """Process a single new recording into its own folder: YYYYMMDD_主题/.
 
     Pipeline:
       1. Copy audio to a temp folder under data/
-      2. ASR -> transcript.csv
+      2. ASR -> transcript.md
       3. AI minutes -> meeting.md + topic
       4. Rename temp folder to YYYYMMDD_主题/
       5. Rename files inside to match folder name
-      6. Sync minutes to iCloud, then iMessage notify (if configured)
+      6. Register the recording and check for a continuation of another session
+      7. Sync minutes to iCloud, then iMessage notify (if configured)
     """
     from .asr import run_asr_for_file_to_dir
     from .postprocess import run_minutes_for_dir
     from .rename import sanitize_topic
-    from .sync import recording_day, recording_timestamp, sync_minutes_to_cloud
+    from .sync import recording_day, recording_timestamp
+    from .sessions import auto_merge, recording_metadata, register_recording, sync_session
+
+    metadata = recording_metadata(source_path)
 
     # Build a temporary working directory
     day = recording_day(source_path)
-    ts = recording_timestamp(source_path).strftime("%Y%m%d_%H%M%S")
-    temp_name = f"tmp_{ts}"
-    temp_dir = data_dir / temp_name
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+    from tempfile import mkdtemp
+
+    stamp = datetime.fromisoformat(metadata["start"]) if metadata["start"] else recording_timestamp(source_path)
+    ts = stamp.strftime("%Y%m%d_%H%M%S")
+    day = stamp.strftime("%Y%m%d") if metadata["start"] else day
+    temp_dir = Path(mkdtemp(prefix=f"tmp_{ts}_", dir=data_dir))
 
     # Copy audio into temp dir
     temp_audio = temp_dir / source_path.name
@@ -156,6 +232,7 @@ def process_new_recording(
     # Minutes -> get topic
     minutes_result = run_minutes_for_dir(temp_dir, engine=minutes_engine)
     topic = minutes_result.get("topic")
+    has_content = bool(minutes_result.get("has_content", True))
     print(f"[Watch] Minutes topic: {topic}", file=sys.stderr)
 
     # Determine final folder name
@@ -194,15 +271,33 @@ def process_new_recording(
             new_name = f"{final_base}_transcript.md"
             file.rename(final_dir / new_name)
 
-    # Sync meeting minutes to cloud directory
-    synced_path = sync_minutes_to_cloud(final_dir, sync_dir)
-    if synced_path:
-        print(f"[Watch] Synced minutes to: {synced_path}", file=sys.stderr)
+    register_recording(data_dir, final_dir, recording_id, metadata, has_content)
+    merged = None
+    try:
+        merged = auto_merge(data_dir, recording_id, minutes_engine)
+    except Exception as exc:
+        # A classifier/model outage must not lose the independently processed note.
+        print(f"[Watch] Continuation check/merge failed; kept separate: {exc}", file=sys.stderr)
+    if merged:
+        final_dir = Path(merged["final_dir"])
+        topic = merged.get("topic") or topic
+        has_content = bool(merged["has_content"])
+        print(f"[Watch] Updated session: {final_dir.name} ({merged['part_count']} parts)", file=sys.stderr)
 
-    # Notify via shared iMessage channel (best-effort, never raises)
-    from .notify import notify_minutes_ready
+    # Sync meeting minutes to cloud directory; skip sync + iMessage notify for
+    # accidental/empty recordings (no valid content) — they stay local only.
+    synced_path = None
+    if has_content:
+        synced_path = sync_session(data_dir, final_dir, sync_dir)
+        if synced_path:
+            print(f"[Watch] Synced minutes to: {synced_path}", file=sys.stderr)
 
-    notify_minutes_ready(topic=topic, folder_name=final_dir.name)
+        # Notify via shared iMessage channel (best-effort, never raises)
+        from .notify import notify_minutes_ready
+
+        notify_minutes_ready(topic=topic, folder_name=final_dir.name)
+    else:
+        print(f"[Watch] No valid content; skipping sync and notify: {final_dir.name}", file=sys.stderr)
 
     return {
         "command": "process-file",
@@ -212,7 +307,10 @@ def process_new_recording(
         "asr_rows": len(asr_rows),
         "minutes_engine": minutes_engine,
         "topic": topic,
+        "has_content": has_content,
         "synced_path": str(synced_path) if synced_path else None,
+        "merged": merged is not None,
+        "part_count": merged["part_count"] if merged else 1,
     }
 
 
@@ -236,8 +334,14 @@ def start_watch(
             "Install it with: uv pip install watchdog"
         )
 
-    # Track files currently being processed to avoid duplicates
+    # Prevent a second concurrent instance: duplicate watch processes each
+    # process the same recording and produce duplicated folders/minutes.
+    _lock_fh = acquire_watch_lock(data_dir)
+
+    # Track files currently being processed to avoid duplicates, plus a
+    # persistent ledger (survives restarts) of sources already processed.
     _processing: set[str] = set()
+    _processed: set[str] = load_processed_sources(data_dir)
 
     class VoiceMemoHandler(FileSystemEventHandler):
         def on_created(self, event: Any) -> None:
@@ -247,7 +351,10 @@ def start_watch(
             if path.suffix.lower() not in (".m4a", ".qta"):
                 return
 
-            # Skip if already processing
+            # Skip if already processed (persistent) or currently processing
+            if path.name in _processed:
+                print(f"[Watch] Skipping (already processed): {path.name}", file=sys.stderr)
+                return
             path_str = str(path.resolve())
             if path_str in _processing:
                 return
@@ -269,11 +376,23 @@ def start_watch(
                     minutes_engine=minutes_engine,
                     sync_dir=sync_dir,
                 )
+                mark_processed_source(data_dir, path.name)
+                _processed.add(path.name)
                 print(json.dumps(result, indent=2, sort_keys=True), file=sys.stderr)
             except Exception as exc:
                 print(f"[Watch] Error processing {path.name}: {exc}", file=sys.stderr)
             finally:
                 _processing.discard(path_str)
+                # Release the resident MLX model so the daemon does not pin
+                # several GB of GPU memory while idle between recordings.
+                if asr_engine == "mlx":
+                    from .asr import unload_mlx_model
+
+                    unload_mlx_model()
+                    print("[Watch] MLX model unloaded (will reload on next recording)", file=sys.stderr)
+
+    from .dashboard import maybe_refresh_dashboard
+    maybe_refresh_dashboard(data_dir, sync_dir)
 
     observer = Observer()
     handler = VoiceMemoHandler()

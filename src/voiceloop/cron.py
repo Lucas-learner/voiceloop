@@ -33,7 +33,7 @@ def _day_label(day: int) -> str:
     return labels[day]
 
 
-def cron_line(repo_root: Path, hour: int = 0, minute: int = 0, day_of_week: int = 0) -> str:
+def cron_line(repo_root: Path, hour: int = 0, minute: int = 0, day_of_week: int = 1) -> str:
     python_path = repo_root / ".venv" / "bin" / "python"
     log_path = repo_root / "logs" / "voiceloop_cron.log"
     return (
@@ -41,7 +41,7 @@ def cron_line(repo_root: Path, hour: int = 0, minute: int = 0, day_of_week: int 
         f"PATH={shlex.quote(CRON_PATH)}; "
         f"cd {shlex.quote(str(repo_root))} && "
         f"{shlex.quote(str(python_path))} -m voiceloop weekly "
-        f"--engine kimi "
+        f"--last-week "
         f">> {shlex.quote(str(log_path))} 2>&1 "
         f"{CRON_MARKER}"
     )
@@ -84,7 +84,7 @@ def managed_cron_lines(current: str, repo_root: Path | None = None) -> list[str]
     return lines
 
 
-def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", day_of_week: str | int = 0, dry_run: bool = False, current: str | None = None) -> dict[str, object]:
+def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", day_of_week: str | int = 1, dry_run: bool = False, current: str | None = None) -> dict[str, object]:
     hour, minute = _validate_schedule_time(schedule_time)
     dow = _resolve_day_of_week(day_of_week)
     line = cron_line(repo_root, hour=hour, minute=minute, day_of_week=dow)
@@ -101,7 +101,7 @@ def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", day_of_w
         "cron_line": line,
         "backup_path": str(path),
         "schedule_label": f"Every {_day_label(dow)} at {hour:02d}:{minute:02d}",
-        "user_note": f"This sets up VoiceLoop to generate weekly reports each {_day_label(dow)} when the Mac is awake.",
+        "user_note": f"This sets up VoiceLoop to generate weekly reports each {_day_label(dow)} when the Mac is awake, summarizing the week that just ended.",
     }
     if dry_run:
         summary["new_crontab"] = new_crontab
@@ -112,7 +112,7 @@ def replace_managed_cron(repo_root: Path, schedule_time: str = "00:00", day_of_w
     return summary
 
 
-def append_cron(repo_root: Path, dry_run: bool = False, current: str | None = None, day_of_week: str | int = 0) -> dict[str, object]:
+def append_cron(repo_root: Path, dry_run: bool = False, current: str | None = None, day_of_week: str | int = 1) -> dict[str, object]:
     return replace_managed_cron(repo_root, schedule_time="00:00", day_of_week=day_of_week, dry_run=dry_run, current=current)
 
 

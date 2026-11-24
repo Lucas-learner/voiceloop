@@ -40,28 +40,40 @@ def week_range(week_str: str | None = None) -> tuple[date, date]:
     return monday, sunday
 
 
+def last_week_label() -> str:
+    """ISO week label (YYYYWww) for the week before the current one."""
+    today = date.today()
+    monday = today - timedelta(days=today.weekday() + 7)
+    iso = monday.isocalendar()
+    return f"{iso[0]}W{iso[1]:02d}"
+
+
 def collect_meeting_files(data_dir: Path, monday: date, sunday: date) -> list[Path]:
     """Collect all meeting markdown files within the week range.
 
     New layout: each recording has its own folder named YYYYMMDD_主题/,
     containing YYYYMMDD_主题.md (the meeting minutes).
     """
+    from .sessions import weekly_membership
+
+    superseded, session_days = weekly_membership(data_dir)
     files: list[Path] = []
     for folder in data_dir.iterdir():
-        if not folder.is_dir() or folder.name.startswith("tmp_"):
+        if not folder.is_dir() or folder.name.startswith("tmp_") or folder.name in superseded:
             continue
         # Parse date prefix from folder name: YYYYMMDD_...
         day_match = re.match(r"(\d{8})_", folder.name)
         if not day_match:
             continue
         try:
-            folder_date = datetime.strptime(day_match.group(1), "%Y%m%d").date()
+            folder_date = datetime.strptime(session_days.get(folder.name, day_match.group(1)), "%Y%m%d").date()
         except ValueError:
             continue
         if monday <= folder_date <= sunday:
-            for path in sorted(folder.glob("*.md")):
+            for path in (folder / f"{folder.name}.md", folder / "meeting.md"):
                 if path.is_file():
                     files.append(path)
+                    break
     return files
 
 
@@ -73,8 +85,7 @@ def build_kimi_weekly_prompt(data_dir: Path, week_str: str | None = None) -> str
     # Build content from all meeting files
     contents = []
     for f in files:
-        day = f.parent.parent.name  # YYYYMMDD
-        contents.append(f"## 会议文件: {day}/{f.name}\n\n{f.read_text(encoding='utf-8')}\n")
+        contents.append(f"## 会议文件: {f.parent.name}/{f.name}\n\n{f.read_text(encoding='utf-8')}\n")
 
     all_content = "\n".join(contents) if contents else "本周暂无会议纪要。"
 
@@ -117,7 +128,7 @@ def weekly_filename(sunday: date, week_label: str) -> str:
     return f"{sunday.strftime('%Y%m%d')}_weekly_{week_label}.md"
 
 
-def run_kimi_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path | None = None) -> dict[str, object]:
+def run_kimi_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path | None = None, engine: str = "kimi") -> dict[str, object]:
     monday, sunday = week_range(week_str)
     week_label = week_str or f"{monday.isocalendar()[0]}W{monday.isocalendar()[1]:02d}"
 
@@ -125,13 +136,13 @@ def run_kimi_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path 
     weekly_dir.mkdir(parents=True, exist_ok=True)
     output_path = weekly_dir / weekly_filename(sunday, week_label)
 
-    from .kimi_client import call_kimi_api_with_retry, resolve_kimi_config
+    from .kimi_client import call_chat_api_with_retry, resolve_chat_config
 
-    api_key, base_url = resolve_kimi_config()
+    config = resolve_chat_config(engine)
     prompt = build_kimi_weekly_prompt(data_dir, week_str)
-    print(f"[Kimi Weekly] Generating report (base_url: {base_url})...")
-    response_text = call_kimi_api_with_retry(
-        prompt, api_key, base_url=base_url,
+    print(f"[{engine} Weekly] Generating report (model: {config.model})...")
+    response_text = call_chat_api_with_retry(
+        prompt, config,
         system_message="你是一个工作助手，帮助整理会议纪要周报。",
         timeout=600,
     )
@@ -144,7 +155,8 @@ def run_kimi_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path 
     files = collect_meeting_files(data_dir, monday, sunday)
     return {
         "command": "weekly",
-        "engine": "kimi",
+        "engine": engine,
+        "model": config.model,
         "week": week_label,
         "range": f"{monday.isoformat()} to {sunday.isoformat()}",
         "meeting_count": len(files),
@@ -179,6 +191,15 @@ def run_mock_weekly(data_dir: Path, week_str: str | None = None, sync_dir: Path 
 
 
 def run_weekly(data_dir: Path, week_str: str | None = None, engine: str = "mock", sync_dir: Path | None = None) -> dict[str, object]:
+    from .sessions import pipeline_lock
+
+    # Keep collection, prompt construction and counting on the same membership
+    # snapshot while a watch/manual process may be merging or splitting notes.
+    with pipeline_lock(data_dir):
+        return _run_weekly(data_dir, week_str, engine, sync_dir)
+
+
+def _run_weekly(data_dir: Path, week_str: str | None, engine: str, sync_dir: Path | None) -> dict[str, object]:
     monday, sunday = week_range(week_str)
     week_label = week_str or f"{monday.isocalendar()[0]}W{monday.isocalendar()[1]:02d}"
     files = collect_meeting_files(data_dir, monday, sunday)
@@ -195,10 +216,15 @@ def run_weekly(data_dir: Path, week_str: str | None = None, engine: str = "mock"
             "synced_path": None,
         }
     if engine == "mock":
-        return run_mock_weekly(data_dir, week_str, sync_dir=sync_dir)
-    if engine == "kimi":
-        return run_kimi_weekly(data_dir, week_str, sync_dir=sync_dir)
-    raise ValueError(f"unsupported weekly engine: {engine}")
+        result = run_mock_weekly(data_dir, week_str, sync_dir=sync_dir)
+    elif engine in ("kimi", "deepseek", "api"):
+        result = run_kimi_weekly(data_dir, week_str, sync_dir=sync_dir, engine=engine)
+    else:
+        raise ValueError(f"unsupported weekly engine: {engine}")
+
+    from .dashboard import maybe_refresh_dashboard
+    maybe_refresh_dashboard(data_dir, sync_dir)
+    return result
 
 
 def dumps_summary(summary: dict[str, object]) -> str:

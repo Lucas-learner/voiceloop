@@ -15,8 +15,9 @@ from .rename import is_default_named, rename_with_topic
 from .service import install_watch_agent, remove_watch_agent
 from .sync import recording_day, rename_synced_copy, sync_single_file, sync_voice_memos
 from .watch import process_new_recording, start_watch
-from .weekly import run_weekly
+from .weekly import last_week_label, run_weekly
 from .asr import run_asr, run_asr_for_file
+from .kimi_client import default_chat_engine
 
 
 def today() -> str:
@@ -36,6 +37,7 @@ def add_common_paths(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voiceloop", description="VoiceLoop - AI meeting minutes from voice memos")
+    minutes_default = default_chat_engine()
     parser.add_argument("--version", action="version", version=f"voiceloop {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -43,20 +45,43 @@ def build_parser() -> argparse.ArgumentParser:
     watch = subparsers.add_parser("watch", help="Watch Voice Memos directory for new recordings")
     add_common_paths(watch)
     watch.add_argument("--asr-engine", choices=["mock", "mlx", "api"], default="mlx", help="ASR engine (default: mlx)")
-    watch.add_argument("--minutes-engine", choices=["mock", "codex", "kimi"], default="kimi", help="Minutes engine (default: kimi)")
+    watch.add_argument("--minutes-engine", choices=["mock", "codex", "kimi", "deepseek", "api"], default=minutes_default)
 
     # process-file - Manually process a single recording
     proc = subparsers.add_parser("process-file", help="Process a single audio file")
     proc.add_argument("path", help="Path to the audio file")
     add_common_paths(proc)
     proc.add_argument("--asr-engine", choices=["mock", "mlx", "api"], default="mlx")
-    proc.add_argument("--minutes-engine", choices=["mock", "codex", "kimi"], default="kimi")
+    proc.add_argument("--minutes-engine", choices=["mock", "codex", "kimi", "deepseek", "api"], default=minutes_default)
+
+    sessions = subparsers.add_parser("sessions", help="List sessions and original recording IDs for merge/split")
+    add_common_paths(sessions)
+
+    merge = subparsers.add_parser("merge", help="Merge recording/session folders; keep the first folder as the output")
+    merge.add_argument("folders", nargs="+", help="Folder paths or names under the data directory")
+    add_common_paths(merge)
+    merge.add_argument("--minutes-engine", choices=["mock", "codex", "kimi", "deepseek", "api"], default=minutes_default)
+
+    split = subparsers.add_parser("split", help="Split selected original recordings into a separate session")
+    split.add_argument("folder", help="Session folder path or name")
+    split.add_argument("--part", action="append", required=True, help="Original source filename, recording ID, or folder name; repeatable")
+    add_common_paths(split)
+    split.add_argument("--minutes-engine", choices=["mock", "codex", "kimi", "deepseek", "api"], default=minutes_default)
 
     # weekly - Generate weekly report
     weekly = subparsers.add_parser("weekly", help="Generate weekly report from meeting minutes")
     add_common_paths(weekly)
-    weekly.add_argument("--date", default=None, help="ISO week like 2026W21. Default: current week")
-    weekly.add_argument("--engine", choices=["mock", "kimi"], default="kimi", help="Weekly report engine (default: kimi)")
+    week_group = weekly.add_mutually_exclusive_group()
+    week_group.add_argument("--date", default=None, help="ISO week like 2026W21. Default: current week")
+    week_group.add_argument("--last-week", action="store_true", help="Generate report for the previous week (Mon-Sun)")
+    weekly.add_argument("--engine", choices=["mock", "kimi", "deepseek", "api"], default=minutes_default)
+
+    # dashboard - Generate Obsidian & HTML dashboards
+    dash = subparsers.add_parser("dashboard", help="Generate Obsidian & HTML visual dashboards from meeting minutes")
+    add_common_paths(dash)
+    dash.add_argument("--no-sync", action="store_true", help="Do not copy dashboard files to sync_dir")
+    dash.add_argument("--enrich-notes", action="store_true", default=True, help="Enrich synced notes in sync_dir with Obsidian YAML frontmatter and links (default: True)")
+    dash.add_argument("--no-enrich-notes", dest="enrich_notes", action="store_false", help="Do not enrich synced notes with YAML frontmatter")
 
     # doctor - Check environment
     doctor = subparsers.add_parser("doctor", help="Check local environment and paths")
@@ -66,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     cron = subparsers.add_parser("install-cron", help="Set up the optional weekly cron job")
     add_common_paths(cron)
     cron.add_argument("--dry-run", action="store_true")
-    cron.add_argument("--day", default="fri", help="Day of week to run weekly report. Default: fri. Options: sun, mon, tue, wed, thu, fri, sat or 0-6")
+    cron.add_argument("--day", default="mon", help="Day of week to run weekly report. Default: mon (00:00 Monday, summarizing the week that just ended). Options: sun, mon, tue, wed, thu, fri, sat or 0-6")
 
     # remove-cron - Remove cron
     rm_cron = subparsers.add_parser("remove-cron", help="Remove the weekly cron job")
@@ -98,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     minutes_cmd = subparsers.add_parser("minutes", help="Generate meeting minutes for one day")
     add_common_paths(minutes_cmd)
     minutes_cmd.add_argument("--date", default=today(), help="Day as YYYYMMDD")
-    minutes_cmd.add_argument("--engine", choices=["mock", "codex", "kimi"], default="kimi")
+    minutes_cmd.add_argument("--engine", choices=["mock", "codex", "kimi", "deepseek", "api"], default=minutes_default)
 
     return parser
 
@@ -135,7 +160,16 @@ def _check_watchdog() -> bool:
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
-    config = load_config(args.source, args.data_dir, args.repo_root)
+    config = load_config(args.source, args.data_dir, args.repo_root, args.sync_dir)
+
+    if args.command in ("sessions", "merge", "split"):
+        from .sessions import list_sessions, merge_recordings, split_session
+
+        if args.command == "sessions":
+            return list_sessions(config.data_dir)
+        if args.command == "merge":
+            return merge_recordings(config.data_dir, args.folders, args.minutes_engine, config.sync_dir)
+        return split_session(config.data_dir, args.folder, args.part, args.minutes_engine, config.sync_dir)
 
     if args.command == "doctor":
         return doctor_payload(args.source, args.data_dir, args.repo_root)
@@ -156,7 +190,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         )
 
     if args.command == "weekly":
-        return run_weekly(config.data_dir, week_str=args.date, engine=args.engine, sync_dir=config.sync_dir)
+        week_str = args.date or (last_week_label() if args.last_week else None)
+        return run_weekly(config.data_dir, week_str=week_str, engine=args.engine, sync_dir=config.sync_dir)
+
+    if args.command == "dashboard":
+        from .dashboard import generate_dashboard
+
+        sync_dir = None if args.no_sync else config.sync_dir
+        return generate_dashboard(config.data_dir, sync_dir=sync_dir, enrich_synced=args.enrich_notes)
 
     if args.command == "install-cron":
         return append_cron(config.repo_root, dry_run=args.dry_run, day_of_week=args.day)

@@ -112,6 +112,8 @@ def run_mlx_asr(data_dir: Path, day: str) -> dict[str, object]:
             return_timestamps=False,
             return_chunks=True,
         )
+        if getattr(result, "truncated", False):
+            raise RuntimeError(f"ASR output was truncated for {path.name}; transcript was not saved")
         chunks = cast(list[dict[str, object]], getattr(result, "chunks", None) or [])
         chunk_count = len(chunks)
         for chunk_idx, chunk in enumerate(chunks, 1):
@@ -172,6 +174,32 @@ def run_api_asr(audio_path: Path) -> str:
         return response.text
 
 
+def unload_mlx_model() -> None:
+    """Release the cached MLX model, tokenizer and Metal buffers.
+
+    Best-effort: used by the watch daemon so a long-running process does not
+    pin several GB of GPU memory between recordings. The model is reloaded on
+    the next transcription.
+    """
+    try:
+        load_models = importlib.import_module("mlx_qwen3_asr.load_models")
+        tokenizer = importlib.import_module("mlx_qwen3_asr.tokenizer")
+        mx = importlib.import_module("mlx.core")
+    except ImportError:
+        return
+
+    import gc
+
+    load_models._ModelHolder.clear()
+    tokenizer_cache = getattr(tokenizer._TokenizerHolder, "_cache", None)
+    if tokenizer_cache is not None:
+        tokenizer_cache.clear()
+    gc.collect()
+    clear_cache = getattr(mx, "clear_cache", None) or getattr(getattr(mx, "metal", None), "clear_cache", None)
+    if clear_cache is not None:
+        clear_cache()
+
+
 def run_mlx_asr_for_file(audio_path: Path) -> list[dict[str, str]]:
     """Transcribe a single file with MLX, return rows."""
     try:
@@ -187,6 +215,8 @@ def run_mlx_asr_for_file(audio_path: Path) -> list[dict[str, str]]:
         return_timestamps=False,
         return_chunks=True,
     )
+    if getattr(result, "truncated", False):
+        raise RuntimeError(f"ASR output was truncated for {audio_path.name}; transcript was not saved")
     chunks = cast(list[dict[str, object]], getattr(result, "chunks", None) or [])
     rows = []
     for chunk in chunks:
