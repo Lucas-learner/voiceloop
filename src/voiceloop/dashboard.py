@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 from typing import Any
 
@@ -943,7 +944,7 @@ def generate_dashboard(
 
 
 def maybe_refresh_dashboard(data_dir: Path, sync_dir: Path | None = None) -> None:
-    """Best-effort dashboard refresh if dashboard already exists or auto-refresh is explicitly enabled.
+    """Best-effort refresh in a fresh interpreter, so watchers cannot reuse a stale renderer.
 
     Does not run if dashboard has never been initialized, preserving isolation in tests.
     """
@@ -955,7 +956,21 @@ def maybe_refresh_dashboard(data_dir: Path, sync_dir: Path | None = None) -> Non
     if not should_refresh:
         return
 
+    command = [
+        sys.executable, "-m", "voiceloop", "dashboard",
+        "--data-dir", str(data_dir), "--no-enrich-notes",
+    ]
+    if sync_dir is None:
+        command.append("--no-sync")
+    else:
+        command.extend(["--sync-dir", str(sync_dir)])
+
     try:
-        generate_dashboard(data_dir, sync_dir=sync_dir, enrich_synced=False)
-    except Exception as exc:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
+            print(f"[Dashboard] Auto-refresh failed: {detail}", file=sys.stderr)
+            return
+        print("[Dashboard] Auto-refresh completed in a fresh process", file=sys.stderr)
+    except (OSError, subprocess.SubprocessError) as exc:
         print(f"[Dashboard] Auto-refresh failed: {exc}", file=sys.stderr)

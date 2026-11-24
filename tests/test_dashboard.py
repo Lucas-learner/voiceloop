@@ -421,6 +421,38 @@ def test_maybe_refresh_dashboard(tmp_path: Path, monkeypatch):
     assert "研发周会" in updated_md
 
 
+def test_auto_refresh_uses_fresh_process_instead_of_cached_renderer(tmp_path: Path, monkeypatch):
+    data_dir = tmp_path / "data"
+    sync_dir = tmp_path / "sync"
+    data_dir.mkdir()
+    sync_dir.mkdir()
+    (data_dir / "00_纪要看板.md").write_text("initialized", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(
+        dashboard,
+        "generate_dashboard",
+        lambda *args, **kwargs: pytest.fail("stale in-process renderer must not be called"),
+    )
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return dashboard.subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(dashboard.subprocess, "run", run)
+    dashboard.maybe_refresh_dashboard(data_dir, sync_dir)
+
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command[:4] == [dashboard.sys.executable, "-m", "voiceloop", "dashboard"]
+    assert command[command.index("--data-dir") + 1] == str(data_dir)
+    assert command[command.index("--sync-dir") + 1] == str(sync_dir)
+    assert "--no-enrich-notes" in command
+    assert "--no-sync" not in command
+    assert kwargs["capture_output"] is True
+    assert kwargs["timeout"] == 120
+
+
 def test_cli_dashboard_command(tmp_path: Path):
     data_dir = tmp_path / "data"
     sync_dir = tmp_path / "sync"
